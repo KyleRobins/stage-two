@@ -51,19 +51,13 @@ jobs:
           debug: true
           script_stop: true
           script: |
-            # Update instance
+            # Update and setup
             sudo apt-get update
             sudo apt-get install -y docker.io nginx
             sudo systemctl start docker
             sudo systemctl enable docker
 
-            # Install Docker Compose if not installed
-            if ! command -v docker-compose &> /dev/null; then
-              sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-              sudo chmod +x /usr/local/bin/docker-compose
-            fi
-
-            # Setup app directory
+            # Setup app
             if [ ! -d "/app" ]; then
               sudo git clone https://github.com/KyleRobins/stage-two.git /app
             else
@@ -81,20 +75,13 @@ jobs:
                     proxy_pass http://localhost:8000;
                     proxy_set_header Host \$host;
                     proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    
-                    # Security headers
-                    proxy_hide_header X-Powered-By;
-                    proxy_read_timeout 60s;
-                    proxy_connect_timeout 60s;
                 }
             }
             EOL'
 
-            # Enable Nginx site
             sudo ln -sf /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
             sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t
             sudo systemctl restart nginx
 
             # Deploy application
