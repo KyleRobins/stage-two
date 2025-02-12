@@ -29,43 +29,53 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v1
-
-      - name: Terraform Init
-        run: |
-          cd terraform/environments/prod
-          terraform init
-
-      - name: Terraform Apply
-        run: |
-          cd terraform/environments/prod
-          terraform apply -auto-approve
-
-      - name: Get EC2 IP
-        id: get-ip
-        run: |
-          echo "::set-output name=ip::$(cd terraform/environments/prod && terraform output -raw public_ip)"
-
-      - name: Wait for instance setup
-        run: |
-          sleep 60  # Wait for user data script to complete
-
-      - name: Deploy Application
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ steps.get-ip.outputs.ip }}
+          host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # Update instance
+            sudo apt-get update
+            sudo apt-get install -y docker.io nginx
+            sudo systemctl start docker
+            sudo systemctl enable docker
+
+            # Install Docker Compose if not installed
+            if ! command -v docker-compose &> /dev/null; then
+              sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              sudo chmod +x /usr/local/bin/docker-compose
+            fi
+
+            # Setup app directory
+            if [ ! -d "/app" ]; then
+              sudo git clone https://github.com/KyleRobins/stage-two.git /app
+            else
+              cd /app
+              sudo git pull origin main
+            fi
+
+            # Configure Nginx
+            sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
+            server {
+                listen 80;
+                server_name _;
+
+                location / {
+                    proxy_pass http://localhost:8000;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                }
+            }
+            EOL'
+
+            # Enable Nginx site
+            sudo ln -sf /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo systemctl restart nginx
+
+            # Deploy application
             cd /app
-            git pull origin main
-            docker-compose down
-            docker-compose up -d
+            sudo docker-compose down
+            sudo docker-compose up --build -d
