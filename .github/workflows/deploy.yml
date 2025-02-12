@@ -58,16 +58,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
             
-            # Start Docker and add user to docker group
+            # Configure Docker permissions
             sudo systemctl start docker
             sudo systemctl enable docker
+            sudo groupadd -f docker
             sudo usermod -aG docker ubuntu
-            newgrp docker
+            sudo chmod 666 /var/run/docker.sock
             
-            # Verify Docker is running
-            sudo systemctl status docker
-            
-            # Setup app
+            # Setup app directory with correct permissions
             if [ ! -d "/app" ]; then
               sudo git clone https://github.com/KyleRobins/stage-two.git /app
               sudo chown -R ubuntu:ubuntu /app
@@ -75,6 +73,10 @@ jobs:
               cd /app
               sudo git pull origin main
             fi
+            
+            # Update docker-compose.yml to remove version
+            cd /app
+            sed -i '/^version:/d' docker-compose.yml
 
             # Configure Nginx
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
@@ -95,10 +97,10 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Deploy application
+            # Deploy application with sudo
             cd /app
-            docker compose down || true
-            docker compose up --build -d
+            sudo -E docker compose down || true
+            sudo -E docker compose up --build -d
 
             # Add health check
             timeout 300 bash -c 'while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' localhost:8000/health)" != "200" ]]; do sleep 5; done' || exit 1
