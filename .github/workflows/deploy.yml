@@ -58,15 +58,6 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-            # Create SSL certificate directory
-            sudo mkdir -p /etc/nginx/ssl
-
-            # Generate self-signed certificate
-            sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-              -keyout /etc/nginx/ssl/nginx.key \
-              -out /etc/nginx/ssl/nginx.crt \
-              -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"
-
             # Configure Docker permissions
             sudo systemctl start docker
             sudo systemctl enable docker
@@ -94,23 +85,11 @@ jobs:
             cd /app
             sudo docker build -t fastapi-app . && sudo docker run -d -p 8000:8000 --name fastapi-app fastapi-app
 
-            # Configure Nginx with HTTPS
+            # Configure Nginx
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
             server {
                 listen 80;
                 server_name _;
-                return 301 https://$host$request_uri;
-            }
-
-            server {
-                listen 443 ssl;
-                server_name _;
-
-                ssl_certificate /etc/nginx/ssl/nginx.crt;
-                ssl_certificate_key /etc/nginx/ssl/nginx.key;
-                
-                ssl_protocols TLSv1.2 TLSv1.3;
-                ssl_ciphers HIGH:!aNULL:!MD5;
 
                 location / {
                     proxy_pass http://localhost:8000;
@@ -127,10 +106,10 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Wait for container to be ready
+            # Health check
             echo "Waiting for application to be ready..."
             for i in {1..30}; do
-              if curl -sk https://localhost/health | grep -q "healthy"; then
+              if curl -s http://localhost/health | grep -q "healthy"; then
                 echo "Application is ready!"
                 exit 0
               fi
