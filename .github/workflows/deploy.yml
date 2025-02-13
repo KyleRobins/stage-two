@@ -1,9 +1,7 @@
-name: CI/CD Pipeline
+name: Deploy FastAPI App
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 jobs:
@@ -11,24 +9,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          
+
       - name: Run tests
         run: |
           pytest --exitfirst --disable-warnings --maxfail=1 || exit 1
 
   deploy:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to EC2
@@ -52,26 +49,13 @@ jobs:
               git pull origin main
             fi
 
-            # Cleanup existing containers and images
-            echo "Cleaning up existing containers..."
+            # Stop and remove existing container
             docker stop fastapi-app || true
             docker rm fastapi-app || true
-            docker rmi fastapi-app || true
 
             # Build and run with exact required command
             cd $APP_DIR
-            echo "Building and running container..."
             docker build -t fastapi-app . && docker run -d -p 8000:8000 --name fastapi-app fastapi-app
-
-            # Wait for container to start
-            echo "Waiting for container to start..."
-            sleep 10
-
-            # Check container status
-            echo "Container status:"
-            docker ps -a
-            echo "Container logs:"
-            docker logs fastapi-app
 
             # Configure Nginx
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
@@ -85,18 +69,6 @@ jobs:
                     proxy_set_header X-Real-IP \$remote_addr;
                     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                     proxy_set_header X-Forwarded-Proto http;
-                    proxy_read_timeout 300;
-                    proxy_connect_timeout 300;
-                }
-
-                location /healthcheck {
-                    proxy_pass http://localhost:8000/healthcheck;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto http;
-                    proxy_read_timeout 300;
-                    proxy_connect_timeout 300;
                 }
             }
             EOL'
@@ -106,25 +78,17 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Health check with both direct and proxied checks
-            echo "Testing application..."
-            for i in {1..12}; do
-              echo "Attempt $i: Direct container access..."
-              if curl -s http://localhost:8000/healthcheck; then
-                echo "Container is responding directly"
-                
-                echo "Attempt $i: Through Nginx..."
-                if curl -s http://localhost/healthcheck; then
-                  echo "Application is fully ready!"
-                  exit 0
-                fi
+            # Wait for application to be ready
+            echo "Waiting for application to start..."
+            for i in {1..6}; do
+              if curl -s http://localhost:8000/healthcheck | grep -q "active"; then
+                echo "Application is ready!"
+                exit 0
               fi
-              echo "Waiting... ($i/12)"
-              sleep 5
+              echo "Attempt $i of 6"
+              sleep 10
             done
 
-            echo "Application failed to respond. Logs:"
+            echo "Application failed to start. Logs:"
             docker logs fastapi-app
-            echo "Nginx error log:"
-            sudo tail -n 50 /var/log/nginx/error.log
             exit 1
