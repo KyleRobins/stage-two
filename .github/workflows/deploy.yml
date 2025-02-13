@@ -80,8 +80,26 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Health check
+            # Debug information
+            echo "Checking container status:"
+            docker ps
+            docker logs fastapi-app
+
+            echo "Checking Nginx status:"
+            sudo systemctl status nginx
+
+            echo "Checking ports:"
+            sudo netstat -tulpn | grep -E ':80|:8000'
+
+            # Health check with debugging
+            echo "Starting health checks..."
             for i in {1..12}; do
+              echo "Attempt $i: Checking container directly..."
+              curl -v http://localhost:8000/health
+              
+              echo "Attempt $i: Checking through Nginx..."
+              curl -v http://localhost/health
+              
               if curl -s http://localhost/health | grep -q "healthy"; then
                 echo "Application is ready!"
                 exit 0
@@ -89,5 +107,8 @@ jobs:
               echo "Waiting... ($i/12)"
               sleep 5
             done
+
             echo "Application failed to become ready"
+            echo "Final container logs:"
+            docker logs fastapi-app
             exit 1
