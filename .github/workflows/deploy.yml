@@ -83,11 +83,16 @@ jobs:
               sudo git pull origin main
             fi
 
+            # Cleanup any existing containers and processes using port 8000
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 || true
+            sudo docker ps -q --filter "publish=8000" | xargs -r sudo docker stop || true
+            sudo docker ps -aq --filter "publish=8000" | xargs -r sudo docker rm || true
+            sudo docker ps -q --filter "name=fastapi-app" | xargs -r sudo docker stop || true
+            sudo docker ps -aq --filter "name=fastapi-app" | xargs -r sudo docker rm || true
+
             # Build and run the FastAPI application with the exact required command
             cd /app
-            sudo docker stop fastapi-app || true
-            sudo docker rm fastapi-app || true
-            sudo docker build -t fastapi-app . && sudo docker run -d -p 8000:8000 fastapi-app
+            sudo docker build -t fastapi-app . && sudo docker run -d -p 8000:8000 --name fastapi-app fastapi-app
 
             # Configure Nginx with HTTPS
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
