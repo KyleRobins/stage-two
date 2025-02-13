@@ -1,32 +1,34 @@
-name: Deploy FastAPI App
+name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
+          
       - name: Run tests
         run: |
           pytest --exitfirst --disable-warnings --maxfail=1 || exit 1
 
   deploy:
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to EC2
@@ -59,7 +61,7 @@ jobs:
             # Build and run with exact required command
             cd $APP_DIR
             echo "Building and running container..."
-            docker build -t fastapi-app . && docker run -d --name fastapi-app -p 8000:8000 fastapi-app
+            docker build -t fastapi-app . && docker run -d -p 8000:8000 --name fastapi-app fastapi-app
 
             # Wait for container to start
             echo "Waiting for container to start..."
@@ -74,8 +76,7 @@ jobs:
             # Configure Nginx
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
             server {
-                listen 80 default_server;
-                listen [::]:80 default_server;
+                listen 80;
                 server_name _;
 
                 location / {
@@ -84,8 +85,6 @@ jobs:
                     proxy_set_header X-Real-IP \$remote_addr;
                     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                     proxy_set_header X-Forwarded-Proto http;
-                    proxy_read_timeout 60;
-                    proxy_connect_timeout 60;
                 }
             }
             EOL'
@@ -95,24 +94,18 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Verify application is running
-            echo "Verifying application..."
-            for i in {1..6}; do
-              echo "Check $i: Testing direct container access..."
-              if curl -s http://localhost:8000/health; then
-                echo "Container is responding!"
-                
-                echo "Check $i: Testing through Nginx..."
-                if curl -s http://localhost/health; then
-                  echo "Application is fully ready!"
-                  exit 0
-                fi
+            # Health check
+            echo "Testing application..."
+            for i in {1..12}; do
+              if curl -s http://localhost:8000/healthcheck; then
+                echo "Application is ready!"
+                exit 0
               fi
-              echo "Waiting... ($i/6)"
-              sleep 10
+              echo "Waiting... ($i/12)"
+              sleep 5
             done
 
-            echo "Application failed to start. Logs:"
+            echo "Application failed to respond. Logs:"
             docker logs fastapi-app
             echo "Nginx error log:"
             sudo tail -n 50 /var/log/nginx/error.log
