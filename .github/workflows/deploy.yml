@@ -58,6 +58,15 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
+            # Create SSL certificate directory
+            sudo mkdir -p /etc/nginx/ssl
+
+            # Generate self-signed certificate
+            sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout /etc/nginx/ssl/nginx.key \
+              -out /etc/nginx/ssl/nginx.crt \
+              -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"
+
             # Configure Docker permissions
             sudo systemctl start docker
             sudo systemctl enable docker
@@ -74,20 +83,36 @@ jobs:
               sudo git pull origin main
             fi
 
-            # Update docker-compose.yml to remove version
+            # Build and run the FastAPI application with the exact required command
             cd /app
-            sed -i '/^version:/d' docker-compose.yml
+            sudo docker stop fastapi-app || true
+            sudo docker rm fastapi-app || true
+            sudo docker build -t fastapi-app . && sudo docker run -d -p 8000:8000 fastapi-app
 
-            # Configure Nginx
+            # Configure Nginx with HTTPS
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
             server {
                 listen 80;
                 server_name _;
+                return 301 https://$host$request_uri;
+            }
+
+            server {
+                listen 443 ssl;
+                server_name _;
+
+                ssl_certificate /etc/nginx/ssl/nginx.crt;
+                ssl_certificate_key /etc/nginx/ssl/nginx.key;
                 
+                ssl_protocols TLSv1.2 TLSv1.3;
+                ssl_ciphers HIGH:!aNULL:!MD5;
+
                 location / {
                     proxy_pass http://localhost:8000;
                     proxy_set_header Host \$host;
                     proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
                 }
             }
             EOL'
@@ -97,15 +122,10 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Deploy application with sudo
-            cd /app
-            sudo -E docker compose down || true
-            sudo -E docker compose up --build -d
-
             # Wait for container to be ready
             echo "Waiting for application to be ready..."
             for i in {1..30}; do
-              if curl -s http://localhost:8000/health | grep -q "healthy"; then
+              if curl -sk https://localhost/health | grep -q "healthy"; then
                 echo "Application is ready!"
                 exit 0
               fi
