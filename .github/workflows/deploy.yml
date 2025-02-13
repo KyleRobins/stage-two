@@ -26,7 +26,7 @@ jobs:
           pytest --exitfirst --disable-warnings --maxfail=1 || exit 1
 
   deploy:
-    needs: test # This ensures deploy runs only after test passes
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to EC2
@@ -50,13 +50,26 @@ jobs:
               git pull origin main
             fi
 
-            # Stop and remove existing containers
+            # Cleanup existing containers and images
+            echo "Cleaning up existing containers..."
             docker stop fastapi-app || true
             docker rm fastapi-app || true
+            docker rmi fastapi-app || true
 
             # Build and run with exact required command
             cd $APP_DIR
-            docker build -t fastapi-app . && docker run -d -p 8000:8000 --name fastapi-app fastapi-app
+            echo "Building and running container..."
+            docker build -t fastapi-app . && docker run -d --name fastapi-app -p 8000:8000 fastapi-app
+
+            # Wait for container to start
+            echo "Waiting for container to start..."
+            sleep 10
+
+            # Check container status
+            echo "Container status:"
+            docker ps -a
+            echo "Container logs:"
+            docker logs fastapi-app
 
             # Configure Nginx
             sudo bash -c 'cat > /etc/nginx/sites-available/fastapi <<EOL
@@ -71,6 +84,8 @@ jobs:
                     proxy_set_header X-Real-IP \$remote_addr;
                     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                     proxy_set_header X-Forwarded-Proto http;
+                    proxy_read_timeout 60;
+                    proxy_connect_timeout 60;
                 }
             }
             EOL'
@@ -80,35 +95,25 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
 
-            # Debug information
-            echo "Checking container status:"
-            docker ps
-            docker logs fastapi-app
-
-            echo "Checking Nginx status:"
-            sudo systemctl status nginx
-
-            echo "Checking ports:"
-            sudo netstat -tulpn | grep -E ':80|:8000'
-
-            # Health check with debugging
-            echo "Starting health checks..."
-            for i in {1..12}; do
-              echo "Attempt $i: Checking container directly..."
-              curl -v http://localhost:8000/health
-              
-              echo "Attempt $i: Checking through Nginx..."
-              curl -v http://localhost/health
-              
-              if curl -s http://localhost/health | grep -q "healthy"; then
-                echo "Application is ready!"
-                exit 0
+            # Verify application is running
+            echo "Verifying application..."
+            for i in {1..6}; do
+              echo "Check $i: Testing direct container access..."
+              if curl -s http://localhost:8000/health; then
+                echo "Container is responding!"
+                
+                echo "Check $i: Testing through Nginx..."
+                if curl -s http://localhost/health; then
+                  echo "Application is fully ready!"
+                  exit 0
+                fi
               fi
-              echo "Waiting... ($i/12)"
-              sleep 5
+              echo "Waiting... ($i/6)"
+              sleep 10
             done
 
-            echo "Application failed to become ready"
-            echo "Final container logs:"
+            echo "Application failed to start. Logs:"
             docker logs fastapi-app
+            echo "Nginx error log:"
+            sudo tail -n 50 /var/log/nginx/error.log
             exit 1
