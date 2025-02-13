@@ -40,6 +40,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker.io nginx
 
+            # Setup Docker permissions
+            sudo groupadd -f docker
+            sudo usermod -aG docker ubuntu
+            sudo chown root:docker /var/run/docker.sock
+            sudo chmod 666 /var/run/docker.sock
+            sudo systemctl restart docker
+            newgrp docker
+
             # Setup app directory
             APP_DIR="/home/ubuntu/app"
             if [ ! -d "$APP_DIR" ]; then
